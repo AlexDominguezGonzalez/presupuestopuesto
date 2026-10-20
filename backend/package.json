@@ -1,0 +1,17 @@
+{
+  "name": "presupuesto-api",
+  "version": "1.0.0",
+  "description": "API REST para calcular presupuestos de desarrollo web (Node.js + Express)",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node test/pruebas.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}
