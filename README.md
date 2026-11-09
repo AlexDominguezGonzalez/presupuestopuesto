@@ -154,3 +154,78 @@ Funcionamiento de `app/page.tsx`:
 - `200` → tarjeta con el desglose (base, páginas adicionales, formulario, segundo idioma) y el total.
 - `400` → alerta roja con los mensajes de validación del servidor (p. ej. al poner 0 o 25 páginas).
 - Si la API no responde → alerta de conexión.
+
+## 7. Ampliación «Presupuesta mi web» (IA + Human-in-the-loop)
+
+El cliente describe su proyecto con sus palabras → la IA (OpenAI) propone servicios del catálogo → el usuario revisa, quita o añade servicios y confirma → **el servidor** calcula el importe → se descarga el presupuesto en PDF.
+
+Todo vive en `frontend/` (Next.js), así que se despliega en Vercel como un único proyecto: las Route Handlers de `app/api/` hacen de servidor.
+
+```
+frontend/
+├── lib/catalogo.ts          ← catálogo con precios (server-only) + calcularPresupuesto()
+├── lib/ia.ts                ← llamada a OpenAI, prompt, parseo y validación del JSON
+├── lib/validacion.ts        ← validación de la solicitud y de los IDs confirmados
+├── app/api/catalogo         ← GET  catálogo SIN precios (para añadir servicios a mano)
+├── app/api/analizar         ← POST { cliente, descripcion } → propuesta de la IA
+├── app/api/presupuesto      ← POST { ids } → líneas con precio real + total
+├── components/presupuesto-pdf.tsx ← documento PDF (@react-pdf/renderer)
+├── app/page.tsx             ← flujo en 3 pasos: Describe → Revisa → Descarga
+└── app/calculadora/page.tsx ← calculadora anterior (usa el backend Express)
+```
+
+### Configuración
+
+```bash
+cd frontend
+cp .env.example .env.local     # y pon tu OPENAI_API_KEY (nunca se sube al repo)
+npm install
+npm run dev                    # http://localhost:3000
+```
+
+Variables: `OPENAI_API_KEY` (obligatoria) y `OPENAI_MODEL` (opcional, por defecto `gpt-4o-mini`).
+En Vercel: *Root Directory* = `frontend` y añadir las mismas variables en *Settings → Environment Variables*.
+
+### Decisiones clave
+
+- **La IA nunca ve precios.** `catalogoSinPrecios()` envía solo `id`, `nombre` y `descripcion`. Los precios están en `lib/catalogo.ts`, marcado `server-only` (no puede acabar en el bundle del navegador).
+- **JSON estricto:** `response_format: { type: "json_object" }`, `temperature: 0.2` y el system prompt del enunciado con el catálogo inyectado dinámicamente. Se le indica además que lo que no esté en el catálogo vaya a `dudas_pendientes` y que ignore instrucciones dentro del texto del cliente.
+- **No se confía en la respuesta de la IA:** se parsea el JSON, se comprueba la estructura, se descartan IDs que no existen en el catálogo y los duplicados, y se recortan textos largos.
+- **Human-in-the-loop:** el usuario puede quitar servicios, añadir cualquiera del catálogo, editar el resumen y descartar dudas. Cualquier cambio invalida el presupuesto confirmado y obliga a recalcular.
+- **El servidor manda en el dinero:** al confirmar solo se envían IDs; `/api/presupuesto` valida que existan, ignora cualquier `precio`/`total` enviado y suma los precios del catálogo.
+- **PDF en el cliente** con `@react-pdf/renderer` (carga diferida al pulsar el botón): no consume tiempo ni memoria de la función de Vercel. Usa los importes devueltos por el servidor.
+- **Validación:** nombre obligatorio (máx. 100), descripción obligatoria (10–1000 caracteres) comprobada en el servidor.
+- **Errores de la API:** timeout de 15 s con 1 reintento. Timeout → 504, sin conexión/saturado → 503, error de OpenAI o JSON inválido → 502, clave ausente o inválida → 500. Siempre con un mensaje amigable y botón «Reintentar» en la interfaz.
+
+### Catálogo
+
+| id | Servicio | Precio |
+|---|---|---|
+| `landing` | Landing page | 300 € |
+| `web_corporativa` | Web corporativa | 600 € |
+| `paginas_adicionales` | Pack de 5 páginas adicionales | 250 € |
+| `formulario_contacto` | Formulario de contacto | 80 € |
+| `segundo_idioma` | Segundo idioma | 150 € |
+| `tienda_online` | Tienda online | 1200 € |
+| `pasarela_pago` | Pasarela de pago | 250 € |
+| `blog` | Blog | 200 € |
+| `reservas` | Sistema de reservas | 350 € |
+| `area_clientes` | Área privada de usuarios | 400 € |
+| `seo_basico` | SEO on-page básico | 180 € |
+| `hosting_dominio` | Hosting y dominio (1er año) | 120 € |
+| `mantenimiento` | Mantenimiento (1 año) | 300 € |
+
+### Casos de prueba
+
+| # | Caso | Entrada | Resultado esperado |
+|---|---|---|---|
+| 1 | Solicitud clara | «Quiero un ecommerce de zapatos con pasarela de pago» | Propone `tienda_online` + `pasarela_pago` |
+| 2 | Solicitud ambigua | «Necesito una web para mi negocio, algo sencillo pero profesional» | Propuesta mínima + varias `dudas_pendientes` |
+| 3 | Servicio que no ofrecemos | «…clínica dental con citas online y además una app móvil» | Propone `reservas`/web; la app móvil aparece en dudas, no como servicio |
+| 4 | ID inventado por la IA | (simulado) la IA devuelve `app_movil_ios` | Se descarta; el usuario ve «se descartaron 1 sugerencia(s)» |
+| 5 | Fallo de la API | Timeout / error 5xx / JSON roto | 504 / 502 / 502 con mensaje amigable y botón «Reintentar» |
+| 6 | Descripción vacía / > 1000 car. | `"   "` / 1001 caracteres | 400 con mensaje descriptivo |
+| 7 | Precio manipulado | `{"ids":["tienda_online","pasarela_pago"],"precio":1,"total":0}` | 200, total 1450 € (se ignora) |
+| 8 | ID no existente al confirmar | `{"ids":["app_movil"]}` | 400 «Servicios no reconocidos…» |
+
+Los ejemplos 1–3 están como botones de ejemplo bajo el campo de descripción.
